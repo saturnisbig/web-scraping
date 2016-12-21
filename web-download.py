@@ -5,51 +5,90 @@ import urllib2
 import re
 import urlparse
 import robotparser
+import datetime
+import time
 
-def download(url, user_agent=None, retries=0):
+def download(url, headers, proxy, num_retries):
     print 'Downloading %s' % url
-    headers = {'User-Agent': user_agent}
     request = urllib2.Request(url, headers=headers)
+    opener = urllib2.build_opener()
     #request = urllib2.Request(url)
+    # 添加代理
+    if proxy:
+        proxy_params = {urlparse.urlparse(url).scheme: proxy}
+        opener.add_handler(urllib2.ProxyHandler(proxy_params))
     try:
-        html = urllib2.urlopen(request).read()
+        resp = opener.open(request)
+        html = resp.read()
+        code = resp.code
     except urllib2.URLError as e:
         print 'Download error:', e.reason
-        html = None
-        if retries > 0:
-            if hasattr(e, 'code') and 500 <= e.code < 600:
+        html = ''
+        if hasattr(e, 'code'):
+            code = e.code
+            if num_retries > 0 and 500 <= code < 600:
                 print 'Retry downloading'
-                return download(url, retries-1)
+                return download(url, headers, proxy, num_retries-1)
+        else:
+            code = None
     return html
 
 
-def link_crawler(seed_url, link_regex, user_agent='wswp', max_depth=-1):
+def link_crawler(seed_url, link_regex=None, delay=5, headers=None, user_agent='wswp', proxy=None, num_retries=1, max_depth=-1):
     """
     从某个页面开始，遍历页面中找到的符合需求的页面
     """
     link_queue = [seed_url]
-    link_seen = set(link_queue)
-    rp = get_robotparser()
+    link_seen = {}
+    headers = headers or {}
+    rp = get_robotparser(seed_url)
+    throttle = Throttle(delay)
     while link_queue:
         url = link_queue.pop()
+        throttle.wait(url)
         if rp.can_fetch(user_agent, url):
-            html = download(url)
-            for link in get_links(html):
-                if re.match(link_regex, link):
-                    link = urlparse.urljoin(seed_url, link)
-                    if link not in link_seen:
-                        link_seen.add(link)
-                        link_queue.append(link)
+            html = download(url, headers, proxy, num_retries)
+            depth = link_seen.get(url, 0)
+            if depth != max_depth:
+                for link in get_links(html):
+                    if re.match(link_regex, link):
+                        link = urlparse.urljoin(seed_url, link)
+                        if link not in link_seen:
+                            link_seen[link] = depth + 1
+                            link_queue.append(link)
         else:
-            print 'Blocked by robot.txt', url
+            print 'Blocked by robots.txt', url
+        print link_seen
 
 
 def get_links(html):
     webpage_regex = re.compile('<a[^>]+href=["\'](.*?)["\']', re.IGNORECASE)
     return webpage_regex.findall(html)
 
-def get_robotparser():
-    return robotparser.RobotFileParser()
+def get_robotparser(url):
+    """
+    初始化某个域名的robots文件
+    """
+    rp = robotparser.RobotFileParser()
+    rp.set_url(urlparse.urljoin(url, 'robots.txt'))
+    rp.read()
+    return rp
+
+class Throttle:
+    def __init__(self, delay):
+        self.delay = delay
+        self.domains = {}
+
+    def wait(self, url):
+        domain = urlparse.urlparse(url).netloc
+        last_accessed = self.domains.get(domain)
+
+        if self.delay > 0 and last_accessed is not None:
+            sleep_secs = self.delay - (datetime.datetime.now() - last_accessed).seconds
+            if sleep_secs > 0:
+                time.sleep(sleep_secs)
+        # update the last accessed time
+        self.domains[domain] = datetime.datetime.now()
 
 def sitemap_crawler(sitemap_url):
     html = download(sitemap_url)
