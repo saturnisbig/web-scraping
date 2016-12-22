@@ -8,11 +8,12 @@ import robotparser
 import datetime
 import time
 
+
 def download(url, headers, proxy, num_retries):
     print 'Downloading %s' % url
     request = urllib2.Request(url, headers=headers)
     opener = urllib2.build_opener()
-    #request = urllib2.Request(url)
+    # request = urllib2.Request(url)
     # 添加代理
     if proxy:
         proxy_params = {urlparse.urlparse(url).scheme: proxy}
@@ -34,13 +35,16 @@ def download(url, headers, proxy, num_retries):
     return html
 
 
-def link_crawler(seed_url, link_regex=None, delay=5, headers=None, user_agent='wswp', proxy=None, num_retries=1, max_depth=-1):
+def link_crawler(seed_url, link_regex=None, delay=5, headers=None,
+                 user_agent='wswp', proxy=None, num_retries=1, max_depth=-1):
     """
     从某个页面开始，遍历页面中找到的符合需求的页面
     """
     link_queue = [seed_url]
     link_seen = {}
     headers = headers or {}
+    if user_agent:
+        headers['User-agent'] = user_agent
     rp = get_robotparser(seed_url)
     throttle = Throttle(delay)
     while link_queue:
@@ -49,12 +53,16 @@ def link_crawler(seed_url, link_regex=None, delay=5, headers=None, user_agent='w
         if rp.can_fetch(user_agent, url):
             html = download(url, headers, proxy, num_retries)
             depth = link_seen.get(url, 0)
+            links = []
             if depth != max_depth:
-                for link in get_links(html):
-                    if re.match(link_regex, link):
-                        link = urlparse.urljoin(seed_url, link)
-                        if link not in link_seen:
-                            link_seen[link] = depth + 1
+                if link_regex:
+                    links.extend(link for link in get_links(html) if re.match(link_regex, link))
+                for link in links:
+                    link = lagou_normalize(seed_url, link)
+                    # 区分是否为不同域名下的链接
+                    if link not in link_seen:
+                        link_seen[link] = depth + 1
+                        if same_domain(seed_url, link):
                             link_queue.append(link)
         else:
             print 'Blocked by robots.txt', url
@@ -64,6 +72,19 @@ def link_crawler(seed_url, link_regex=None, delay=5, headers=None, user_agent='w
 def get_links(html):
     webpage_regex = re.compile('<a[^>]+href=["\'](.*?)["\']', re.IGNORECASE)
     return webpage_regex.findall(html)
+
+def normalize(base_url, link):
+    link, _ = urlparse.urldefrag(link)
+    return urlparse.urljoin(base_url, link)
+
+def lagou_normalize(base_url, link):
+    scheme = urlparse.urlparse(base_url).scheme
+    return scheme + ':' + link
+
+
+def same_domain(url1, url2):
+    return urlparse.urlparse(url1).netloc == urlparse.urlparse(url2).netloc
+
 
 def get_robotparser(url):
     """
@@ -116,9 +137,12 @@ def id_crawler(base_url, max_errors=5):
 
 
 if __name__ == "__main__":
+    url = 'https://www.lagou.com/zhaopin/Python'
+    print urlparse.urlparse(url).netloc
+    link_crawler(url, r'//www.lagou.com/(jobs/\d+|zhaopin/Python/\d+)')
     ## link crawler 
-    url = 'http://example.webscraping.com'
-    link_crawler(url, '/(index|view)/')
+    # url = 'http://example.webscraping.com'
+    # link_crawler(url, '/(index|view)/')
     ## Test first download
     #url = 'https://www.douban.com'
     #print download(url)
