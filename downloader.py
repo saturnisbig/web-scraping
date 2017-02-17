@@ -6,8 +6,9 @@ import random
 import urllib2
 import urlparse
 import datetime, time
+import os
+import pickle
 
-from web_download import Throttle
 
 class Downloader:
 
@@ -40,7 +41,7 @@ class Downloader:
         return result['html']
 
     def download(self, url, headers, proxy, num_retries, data=None):
-        print 'Dowloading url: ', url
+        print 'Dowloading ', url
         request = urllib2.Request(url, headers=headers)
         opener = self.opener or urllib2.build_opener()
         if proxy:
@@ -64,28 +65,36 @@ class Downloader:
 
 class DiskCache:
     def __init__(self, cache_dir='cache'):
-        self.cache_dir = cache
+        self.cache_dir = cache_dir
 
     def url_to_path(self, url):
         component = urlparse.urlparse(url)
-        domain = component.netloc
         path = component.path
-        if path:
-            if path.ends_with('/'):
-                path += 'index.html'
-        else:
+        if not path:
             path = '/index.html'
-        filename = domain + path
+        elif path.endswith('/'):
+                path += 'index.html'
+        filename = component.netloc + path
         # 文件名规则正则需改进
-        filename = re.sub(r'[^/0-9a-zA-Z;-]', '_', filename)
-        filename = '/'.join(segment[:255] for segment in urlparse.urlsplit(filename))
-        return filename
+        filename = re.sub(r'[^/0-9a-zA-Z.,;_\-]', '_', filename)
+        filename = '/'.join(segment[:255] for segment in filename.split('/'))
+        return os.path.join(self.cache_dir, filename)
 
-    def __getitem__(self, key):
-        pass
+    def __getitem__(self, url):
+        path = self.url_to_path(url)
+        if os.path.exists(path):
+            with open(path, 'rb') as fd:
+                return pickle.load(fd)
+        else:
+            raise KeyError(url + ' not cached yet.')
 
-    def __setitem__(self, key):
-        pass
+    def __setitem__(self, url, value):
+        path = self.url_to_path(url)
+        dirname = os.path.dirname(path)
+        if not os.path.exists(dirname):
+            os.mkdir(dirname)
+        with open(path, 'wb') as fd:
+            fd.write(pickle.dumps(value))
 
 
 class Throttle:
@@ -102,7 +111,7 @@ class Throttle:
         component = urlparse.urlparse(url)
         last_accessed = self.domains.get(component.netloc)
         if last_accessed:
-            time2sleep = self.delays - (datetime.datetime.now() - before).second
+            time2sleep = self.delays - (datetime.datetime.now() - last_accessed).seconds
             if time2sleep > 0:
                 time.sleep(time2sleep)
         self.domains[component.netloc] = datetime.datetime.now()
